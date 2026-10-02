@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -63,15 +65,7 @@ func main() {
 					},
 				},
 				Action: send(func(cmd *cli.Command) ([]byte, error) {
-					rgb, err := parseColor(cmd.StringArg("color"))
-					if err != nil {
-						return nil, err
-					}
-					percent := cmd.Int("brightness")
-					if percent < 1 || percent > 100 {
-						return nil, fmt.Errorf("invalid brightness %d (want 1 to 100; use off to turn lamps off)", percent)
-					}
-					return colorPacket(dim(rgb, percent)), nil
+					return colorPayload(cmd.StringArg("color"), cmd.Int("brightness"))
 				}),
 			},
 			{
@@ -144,10 +138,44 @@ func main() {
 				},
 				Action: bench,
 			},
+			{
+				Name:  "mcp",
+				Usage: "serve an MCP endpoint that controls the lamps",
+				Description: "Listens for MCP clients (Claude, for example) at http://LISTEN/PATH,\n" +
+					"default http://127.0.0.1:8080/mcp. Every request needs HTTP basic auth.\n" +
+					"Set the password with --password or GOVEE_PASSWORD.\n\n" +
+					"The process has to run within Bluetooth range of the bulbs.\n" +
+					"Put a TLS reverse proxy in front of it before exposing it on the internet;\n" +
+					"basic auth over plain HTTP would send the password in the clear.",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "listen",
+						Usage: "address to listen on",
+						Value: "127.0.0.1:8080",
+					},
+					&cli.StringFlag{
+						Name:  "path",
+						Usage: "URL path of the MCP endpoint",
+						Value: "/mcp",
+					},
+					&cli.StringFlag{
+						Name:    "user",
+						Usage:   "HTTP basic auth user",
+						Value:   "govee",
+						Sources: cli.EnvVars("GOVEE_USER"),
+					},
+					&cli.StringFlag{
+						Name:    "password",
+						Usage:   "HTTP basic auth password",
+						Sources: cli.EnvVars("GOVEE_PASSWORD"),
+					},
+				},
+				Action: serveMCP,
+			},
 		},
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := cmd.Run(ctx, os.Args)
 	stop()
 	if err != nil {
@@ -174,9 +202,7 @@ func send(build func(*cli.Command) ([]byte, error)) cli.ActionFunc {
 		out := cmd.Root().Writer
 
 		if cmd.Bool("dry-run") {
-			for _, l := range lamps {
-				fmt.Fprintf(out, "%s %s % x\n", l.name, l.addr, payload)
-			}
+			fmt.Fprint(out, formatPackets(lamps, payload))
 			return nil
 		}
 
@@ -213,6 +239,15 @@ func scan(ctx context.Context, cmd *cli.Command) error {
 		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", d.addr, d.rssi, d.name, name)
 	}
 	return w.Flush()
+}
+
+// formatPackets renders the plaintext packets a dry run would print.
+func formatPackets(lamps []lamp, payload []byte) string {
+	var b strings.Builder
+	for _, l := range lamps {
+		fmt.Fprintf(&b, "%s %s % x\n", l.name, l.addr, payload)
+	}
+	return b.String()
 }
 
 func logger(cmd *cli.Command) logFunc {

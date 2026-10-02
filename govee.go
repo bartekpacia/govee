@@ -71,6 +71,19 @@ func colorPacket(rgb [3]byte) []byte {
 	return packet(0x33, 0x05, 0x0d, rgb[0], rgb[1], rgb[2])
 }
 
+// colorPayload parses a color and brightness into a color packet.
+// percent is 1 to 100; the bulbs dim by using a darker color.
+func colorPayload(color string, percent int) ([]byte, error) {
+	rgb, err := parseColor(color)
+	if err != nil {
+		return nil, err
+	}
+	if percent < 1 || percent > 100 {
+		return nil, fmt.Errorf("invalid brightness %d (want 1 to 100; use off to turn lamps off)", percent)
+	}
+	return colorPacket(dim(rgb, percent)), nil
+}
+
 func handshakePacket(step byte) []byte {
 	return packet(0xe7, step)
 }

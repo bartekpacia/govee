@@ -21,6 +21,7 @@ govee music                    # follow the audio playing on this machine (Ctrl-
 govee music --delay 200ms      # delay the lights to match a Bluetooth speaker's latency
 govee --dry-run color red      # print packets, don't send
 govee -v on                    # log decrypted protocol traffic
+GOVEE_PASSWORD=secret govee mcp # MCP server for Claude and other clients
 ```
 
 A LAMP is `table`, `drawer`, `all`, or a BLE MAC address.
@@ -30,6 +31,87 @@ Lamp names are hard-coded in `knownLamps` in `govee.go`.
 On Linux it talks to BlueZ over D-Bus, so it doesn't need root.
 Only one BLE client can be connected to a bulb at a time:
 close the Govee app on your phone first.
+
+## MCP server
+
+`govee mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+over HTTP, so a client such as Claude can turn the lamps on and off
+and set their color. The tools are `list_lamps`, `scan_lamps`,
+`turn_on`, `turn_off`, and `set_color`.
+
+The process has to be in Bluetooth range of the bulbs.
+The machine you already run `govee` on is enough.
+A Raspberry Pi is worth adding when you want a small box that stays
+on in that room: a Pi Zero 2 W (Wi-Fi and Bluetooth, 64-bit) is the
+cheap one that works, and a Pi 3, 4, or 5 does too.
+The original Pi Zero and the Pico do not.
+
+It listens on `127.0.0.1:8080` and rejects every request that
+does not send HTTP basic auth. The user defaults to `govee`;
+set it with `--user` or `GOVEE_USER`. The password is required
+and comes from `--password` or `GOVEE_PASSWORD`.
+`--dry-run` works the same way as on the other commands:
+tools print the packet they would send and do not touch Bluetooth.
+
+Put TLS in front before the server is reachable from the internet.
+Basic auth over plain HTTP sends the password in the clear.
+On the Pi, Caddy can fetch a certificate for a name under your
+domain and proxy to the loopback port. For `lights.pacia.tech`,
+point DNS at the machine (and forward ports 80 and 443 to it,
+if it sits behind a home router) and use:
+
+```
+lights.pacia.tech {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+Anyone with the password can change the lights, and nothing else.
+
+Run it as a service, with the password in a root-only file
+(`/etc/govee.env`, mode `600`):
+
+```
+GOVEE_USER=govee
+GOVEE_PASSWORD=pick-a-long-one
+```
+
+```
+[Unit]
+Description=Govee lamp MCP server
+After=bluetooth.target
+
+[Service]
+ExecStart=/usr/local/bin/govee mcp
+EnvironmentFile=/etc/govee.env
+Restart=on-failure
+User=pi
+SupplementaryGroups=bluetooth
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`User` has to be in the `bluetooth` group
+(`sudo usermod -aG bluetooth pi`), because the program talks to
+BlueZ over D-Bus and does not need root.
+Build a binary for the Pi from a 64-bit machine with
+`CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o govee .`
+
+Claude Code connects with the password in a header:
+
+```
+claude mcp add --transport http govee https://lights.pacia.tech/mcp \
+  --header "Authorization: Basic $(echo -n 'govee:pick-a-long-one' | base64)"
+```
+
+The same URL and `Authorization` header work for any other MCP
+client that can attach headers. In claude.ai, add a custom connector
+for that URL and set the request header `Authorization` to
+`Basic` followed by the token `echo -n 'govee:pick-a-long-one' | base64` prints.
+
+`govee music` stays a local command. It listens to the audio
+playing on the machine it runs on, which a Pi in the corner usually is not.
 
 ## Music mode
 
