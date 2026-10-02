@@ -55,12 +55,23 @@ func main() {
 					&cli.StringArg{Name: "color", UsageText: "COLOR", Required: true},
 					lampsArg(),
 				},
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "brightness",
+						Usage: "percent of full brightness, 1 to 100",
+						Value: 100,
+					},
+				},
 				Action: send(func(cmd *cli.Command) ([]byte, error) {
 					rgb, err := parseColor(cmd.StringArg("color"))
 					if err != nil {
 						return nil, err
 					}
-					return colorPacket(rgb), nil
+					percent := cmd.Int("brightness")
+					if percent < 1 || percent > 100 {
+						return nil, fmt.Errorf("invalid brightness %d (want 1 to 100; use off to turn lamps off)", percent)
+					}
+					return colorPacket(dim(rgb, percent)), nil
 				}),
 			},
 			{

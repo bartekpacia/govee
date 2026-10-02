@@ -90,6 +90,28 @@ func TestCLI(t *testing.T) {
 			wantStdout: "table 5C:E7:53:C7:2D:2F 33 05 0d ff 80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 44\n",
 		},
 		{
+			name:       "brightness scales the color",
+			args:       []string{"--dry-run", "color", "--brightness", "50", "red", "table"},
+			wantStdout: "table 5C:E7:53:C7:2D:2F 33 05 0d 80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 bb\n",
+		},
+		{
+			name:       "brightness after the lamp name",
+			args:       []string{"--dry-run", "color", "ff8000", "table", "--brightness", "25"},
+			wantStdout: "table 5C:E7:53:C7:2D:2F 33 05 0d 40 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 5b\n",
+		},
+		{
+			name:       "brightness 0 is rejected",
+			args:       []string{"--dry-run", "color", "--brightness", "0", "red"},
+			wantStderr: "govee: invalid brightness 0 (want 1 to 100; use off to turn lamps off)",
+			wantCode:   1,
+		},
+		{
+			name:       "brightness over 100 is rejected",
+			args:       []string{"--dry-run", "color", "--brightness", "101", "red"},
+			wantStderr: "govee: invalid brightness 101",
+			wantCode:   1,
+		},
+		{
 			name:       "lamp by lower-case MAC gets its name",
 			args:       []string{"--dry-run", "color", "00ff00", "5c:e7:53:c7:2d:2f"},
 			wantStdout: "table 5C:E7:53:C7:2D:2F 33 05 0d 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c4\n",

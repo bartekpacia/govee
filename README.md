@@ -15,6 +15,7 @@ govee on                       # all lamps
 govee off table
 govee color red                # names: red, green, blue, orange, yellow, purple, pink, cyan, white
 govee color ff8000 drawer      # or RRGGBB hex
+govee color red --brightness 30   # percent; dims by scaling the color
 govee raw 330101 table         # raw packet; the checksum is added for you
 govee music                    # follow the audio playing on this machine (Ctrl-C to stop)
 govee music --delay 200ms      # delay the lights to match a Bluetooth speaker's latency

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"math"
 	"net"
 	"slices"
 	"strings"
@@ -153,6 +154,15 @@ func parseColor(s string) ([3]byte, error) {
 		return [3]byte{}, fmt.Errorf("invalid color %q (want RRGGBB hex or one of: %s)", s, names)
 	}
 	return [3]byte(b), nil
+}
+
+// dim scales a color to percent (1 to 100) of its brightness.
+// The bulbs have no separate brightness setting; darker colors are dimmer.
+func dim(rgb [3]byte, percent int) [3]byte {
+	for i, c := range rgb {
+		rgb[i] = byte(math.Round(float64(c) * float64(percent) / 100))
+	}
+	return rgb
 }
 
 // parseRaw parses a hex command payload of 1 to 19 bytes.
