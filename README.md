@@ -4,10 +4,10 @@ Control Govee H6006 smart bulbs over Bluetooth LE,
 locally, without the Govee app or cloud.
 
 ```
-go install github.com/bartekpacia/govee-lightbulbs@latest   # installs as govee-lightbulbs
+go install github.com/bartekpacia/govee@latest
 ```
 
-Usage (shown as `govee`, the name used when building in this directory with `go build -o govee .`):
+Usage:
 
 ```
 govee scan                     # list nearby Govee devices

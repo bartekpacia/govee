@@ -1,4 +1,4 @@
-module github.com/bartekpacia/govee-lightbulbs
+module github.com/bartekpacia/govee
 
 go 1.27.1
 
