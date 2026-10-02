@@ -10,6 +10,8 @@ govee off table
 govee color red                # names: red, green, blue, orange, yellow, purple, pink, cyan, white
 govee color ff8000 drawer      # or RRGGBB hex
 govee raw 330101 table         # raw packet; the checksum is added for you
+govee music                    # follow the audio playing on this machine (Ctrl-C to stop)
+govee music --delay 200ms      # delay the lights to match a Bluetooth speaker's latency
 govee --dry-run color red      # print packets, don't send
 govee -v on                    # log decrypted protocol traffic
 ```
@@ -21,6 +23,21 @@ Lamp names are hard-coded in `knownLamps` in `govee.go`.
 On Linux it talks to BlueZ over D-Bus, so it doesn't need root.
 Only one BLE client can be connected to a bulb at a time:
 close the Govee app on your phone first.
+
+## Music mode
+
+`govee music` records the default output's monitor
+(a copy of everything being played) with `parec`,
+and updates the lamps 20 times per second over open connections:
+
+- On every beat (a sudden rise of the bass), the hue rotates by 137.5°,
+  so consecutive colors are always clearly different.
+- Brightness follows loudness relative to the recent peak:
+  it jumps up immediately and fades out.
+  Dimming works by scaling the RGB values.
+
+The lamps visibly keep up with 20 updates per second
+(measured with the hidden `govee bench` command).
 
 ## Protocol
 

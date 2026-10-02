@@ -23,7 +23,7 @@ var (
 
 const (
 	connectAttempts = 3
-	replyTimeout    = 5 * time.Second
+	replyTimeout    = 2 * time.Second
 )
 
 func mustParseUUID(s string) bluetooth.UUID {
@@ -40,44 +40,68 @@ type logFunc func(format string, args ...any)
 // It connects to all lamps first and then sends to them together,
 // so that their changes happen at the same moment.
 func sendAll(ctx context.Context, lamps []lamp, payload []byte, logf logFunc) ([]error, error) {
+	sessions, results, err := connectAll(ctx, lamps, logf)
+	if err != nil {
+		return nil, err
+	}
+	defer closeAll(sessions)
+	for i, err := range broadcast(ctx, sessions, payload) {
+		if results[i] == nil {
+			results[i] = err
+		}
+	}
+	return results, nil
+}
+
+// connectAll opens a session to every lamp. sessions[i] is nil
+// when lamps[i] could not be reached, and results[i] says why.
+func connectAll(ctx context.Context, lamps []lamp, logf logFunc) (sessions []*session, results []error, err error) {
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
-		return nil, fmt.Errorf("enable bluetooth adapter: %w", err)
+		return nil, nil, fmt.Errorf("enable bluetooth adapter: %w", err)
 	}
 
 	found, err := scanFor(ctx, adapter, lamps)
 	if err != nil {
-		return nil, fmt.Errorf("scan: %w", err)
+		return nil, nil, fmt.Errorf("scan: %w", err)
 	}
 
-	results := make([]error, len(lamps))
-	sessions := make([]*session, len(lamps))
+	sessions = make([]*session, len(lamps))
+	results = make([]error, len(lamps))
 	for i, l := range lamps {
 		addr, ok := found[l.addr]
 		if !ok {
 			results[i] = errors.New("not found (out of range, or is a phone connected to it?)")
 			continue
 		}
-		s, err := openSession(ctx, adapter, addr, logf)
-		if err != nil {
-			results[i] = err
-			continue
-		}
-		defer s.close()
-		sessions[i] = s
+		sessions[i], results[i] = openSession(ctx, adapter, addr, logf)
 	}
+	return sessions, results, nil
+}
 
+func closeAll(sessions []*session) {
+	for _, s := range sessions {
+		if s != nil {
+			s.close()
+		}
+	}
+}
+
+// broadcast sends payload to all sessions at once and waits for their replies.
+// It returns one error per session; nil sessions are skipped.
+func broadcast(ctx context.Context, sessions []*session, payload []byte) []error {
+	errs := make([]error, len(sessions))
 	var wg sync.WaitGroup
 	for i, s := range sessions {
 		if s == nil {
 			continue
 		}
 		wg.Go(func() {
-			_, results[i] = s.exchange(ctx, s.key, payload)
+			_, errs[i] = s.exchange(ctx, s.key, payload)
 		})
 	}
 	wg.Wait()
-	return results, nil
+	return errs
 }
 
 // scanFor scans until all lamps are seen or ctx is done.

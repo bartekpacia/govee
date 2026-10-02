@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"text/tabwriter"
 	"time"
 
@@ -90,10 +91,55 @@ func main() {
 				},
 				Action: scan,
 			},
+			{
+				Name:  "music",
+				Usage: "make lamps follow the audio playing on this machine (Ctrl-C to stop)",
+				Description: "The color changes on every beat and the brightness follows loudness.\n" +
+					"Audio is recorded from the default output's monitor with parec.",
+				Arguments: []cli.Argument{lampsArg()},
+				Flags: []cli.Flag{
+					&cli.FloatFlag{
+						Name:  "rate",
+						Usage: "lamp updates per second",
+						Value: 20,
+					},
+					&cli.DurationFlag{
+						Name:  "delay",
+						Usage: "delay the lights, to match audio latency of e.g. a Bluetooth speaker",
+					},
+					&cli.StringFlag{
+						Name:  "input",
+						Usage: "read raw audio (48 kHz mono s16le) from this file, or - for stdin, instead of recording",
+					},
+				},
+				Action: music,
+			},
+			{
+				Name:      "bench",
+				Usage:     "measure how fast lamps accept color changes",
+				Hidden:    true,
+				Arguments: []cli.Argument{lampsArg()},
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "rates",
+						Usage: "comma-separated updates per second to test",
+						Value: "1,2,5,10,20",
+					},
+					&cli.DurationFlag{
+						Name:  "phase",
+						Usage: "how long to test each rate",
+						Value: 6 * time.Second,
+					},
+				},
+				Action: bench,
+			},
 		},
 	}
 
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	err := cmd.Run(ctx, os.Args)
+	stop()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "govee:", err)
 		os.Exit(1)
 	}

@@ -2,16 +2,42 @@ package main_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var bin string
+
+const sampleRate = 48000
+
+func silence(d time.Duration) []float64 {
+	return make([]float64, int(d.Seconds()*sampleRate))
+}
+
+func sine(hz, amplitude float64, d time.Duration) []float64 {
+	s := make([]float64, int(d.Seconds()*sampleRate))
+	for i := range s {
+		s[i] = amplitude * math.Sin(2*math.Pi*hz*float64(i)/sampleRate)
+	}
+	return s
+}
+
+// pcm encodes samples in -1..1 as 16-bit little-endian, the format govee music reads.
+func pcm(samples []float64) []byte {
+	b := make([]byte, 0, 2*len(samples))
+	for _, s := range samples {
+		b = binary.LittleEndian.AppendUint16(b, uint16(int16(s*32767)))
+	}
+	return b
+}
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "govee-test")
@@ -35,6 +61,7 @@ func TestCLI(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
+		stdin      []byte
 		wantStdout string
 		wantStderr string // substring; empty means stderr must be empty
 		wantUsage  bool   // stdout must be the usage help instead of wantStdout
@@ -104,6 +131,37 @@ func TestCLI(t *testing.T) {
 			wantCode:   1,
 		},
 		{
+			name:       "music: silence is dim red, one line per 1/20 s",
+			args:       []string{"--dry-run", "music", "--input", "-"},
+			stdin:      pcm(silence(1 * time.Second)),
+			wantStdout: strings.Repeat("080000\n", 20),
+		},
+		{
+			name: "music: first bass note after silence is a bright color change",
+			args: []string{"--dry-run", "music", "--input", "-", "--rate", "2"},
+			// At 2 updates/s, each line covers 0.5 s of audio.
+			stdin:      pcm(append(silence(500*time.Millisecond), sine(60, 0.5, 500*time.Millisecond)...)),
+			wantStdout: "080000\n00ff4a\n",
+		},
+		{
+			name:       "music: incomplete last frame is ignored",
+			args:       []string{"--dry-run", "music", "--input", "-", "--rate", "2"},
+			stdin:      pcm(silence(900 * time.Millisecond)),
+			wantStdout: "080000\n",
+		},
+		{
+			name:       "music rejects bad rate",
+			args:       []string{"--dry-run", "music", "--input", "-", "--rate", "0"},
+			wantStderr: "govee: invalid rate 0",
+			wantCode:   1,
+		},
+		{
+			name:       "bench rejects bad rates before connecting",
+			args:       []string{"bench", "--rates", "1,fast"},
+			wantStderr: `govee: invalid rate "fast" in "1,fast"`,
+			wantCode:   1,
+		},
+		{
 			name:       "raw command too long",
 			args:       []string{"--dry-run", "raw", strings.Repeat("00", 20)},
 			wantStderr: "govee: invalid raw command",
@@ -114,6 +172,7 @@ func TestCLI(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), bin, tt.args...)
+			cmd.Stdin = bytes.NewReader(tt.stdin)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
