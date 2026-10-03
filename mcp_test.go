@@ -14,38 +14,47 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// token is long enough to be accepted (at least 26 characters).
+const token = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 func TestMCP(t *testing.T) {
-	url := startMCP(t, []string{"GOVEE_USER=from-env", "GOVEE_PASSWORD=from-env"},
-		"--dry-run", "mcp", "--listen", "127.0.0.1:0", "--user", "ada", "--password", "secret")
+	url := startMCP(t, []string{"GOVEE_TOKEN=from-env-0123456789abcdefghij"},
+		"--dry-run", "mcp", "--listen", "127.0.0.1:0", "--token", token)
 
-	t.Run("missing auth", func(t *testing.T) {
-		status, www := mcpStatus(t, url, "", "")
+	t.Run("missing token", func(t *testing.T) {
+		status, www := mcpStatus(t, url, "")
 		if status != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401", status)
 		}
-		if !strings.Contains(www, "Basic") {
-			t.Errorf("WWW-Authenticate = %q, want a Basic challenge", www)
+		if !strings.HasPrefix(www, "Bearer") {
+			t.Errorf("WWW-Authenticate = %q, want a Bearer challenge", www)
 		}
 	})
-
-	t.Run("wrong password", func(t *testing.T) {
-		status, _ := mcpStatus(t, url, "ada", "nope")
-		if status != http.StatusUnauthorized {
+	t.Run("wrong token", func(t *testing.T) {
+		if status, _ := mcpStatus(t, url, "Bearer nope"); status != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401", status)
 		}
 	})
-
+	t.Run("right token with the wrong scheme", func(t *testing.T) {
+		if status, _ := mcpStatus(t, url, "Basic "+token); status != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", status)
+		}
+	})
+	t.Run("scheme is case-insensitive", func(t *testing.T) {
+		if status, _ := mcpStatus(t, url, "bearer "+token); status != http.StatusOK {
+			t.Errorf("status = %d, want 200", status)
+		}
+	})
 	t.Run("flag overrides environment", func(t *testing.T) {
-		// The process was started with GOVEE_PASSWORD=from-env and --password secret.
-		status, _ := mcpStatus(t, url, "from-env", "from-env")
-		if status != http.StatusUnauthorized {
+		// The process was started with both GOVEE_TOKEN and --token.
+		if status, _ := mcpStatus(t, url, "Bearer from-env-0123456789abcdefghij"); status != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401 (the flag should win over the environment)", status)
 		}
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	session := connectMCP(t, ctx, url, "ada", "secret")
+	session := connectMCP(t, ctx, url, token)
 
 	lt, err := session.ListTools(ctx, nil)
 	if err != nil {
@@ -124,8 +133,8 @@ func TestMCP(t *testing.T) {
 		assertToolError(t, "scan_lamps", map[string]any{"seconds": 99}, "invalid seconds 99")
 	})
 
-	t.Run("public host on loopback", func(t *testing.T) {
-		// Caddy on this machine dials 127.0.0.1 and forwards Host: lights.pacia.tech.
+	t.Run("public host behind a reverse proxy", func(t *testing.T) {
+		// nginx dials the listen address and forwards Host: govee.pacia.tech.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(
@@ -133,8 +142,8 @@ func TestMCP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Host = "lights.pacia.tech"
-		req.SetBasicAuth("ada", "secret")
+		req.Host = "govee.pacia.tech"
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
 		resp, err := http.DefaultClient.Do(req)
@@ -152,12 +161,11 @@ func TestMCP(t *testing.T) {
 	})
 }
 
-func TestMCPPasswordFromEnv(t *testing.T) {
-	url := startMCP(t, []string{"GOVEE_USER=ada", "GOVEE_PASSWORD=secret"},
-		"--dry-run", "mcp", "--listen", "127.0.0.1:0")
+func TestMCPTokenFromEnv(t *testing.T) {
+	url := startMCP(t, []string{"GOVEE_TOKEN=" + token}, "--dry-run", "mcp", "--listen", "127.0.0.1:0")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	session := connectMCP(t, ctx, url, "ada", "secret")
+	session := connectMCP(t, ctx, url, token)
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_lamps"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,69 +178,30 @@ func TestMCPPasswordFromEnv(t *testing.T) {
 	}
 }
 
-func TestMCPRequiresPassword(t *testing.T) {
-	cmd := exec.Command(bin, "mcp", "--listen", "127.0.0.1:0")
-	cmd.Env = withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER", "GOVEE_PATH")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err == nil {
-		t.Fatal("mcp started without a password")
-	}
-	if !strings.Contains(stderr.String(), "GOVEE_PASSWORD") {
-		t.Errorf("stderr = %q, want it to mention GOVEE_PASSWORD", stderr.String())
-	}
-}
-
-// secret is a path segment long enough to be accepted without a password.
-const secret = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-func TestMCPSecretPath(t *testing.T) {
-	url := startMCP(t, nil, "--dry-run", "mcp", "--listen", "127.0.0.1:0", "--path", "/mcp-"+secret)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	session := connectMCP(t, ctx, url, "", "")
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_lamps"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(toolText(res), "table") {
-		t.Errorf("result = %q, want it to mention table", toolText(res))
-	}
-
-	base, _, _ := strings.Cut(url, "/mcp-")
-	for _, wrong := range []string{base + "/mcp", url[:len(url)-1]} {
-		if status, _ := mcpStatus(t, wrong, "", ""); status != http.StatusNotFound {
-			t.Errorf("%s: status = %d, want 404", wrong, status)
-		}
-	}
-}
-
-func TestMCPSecretPathFromEnv(t *testing.T) {
-	url := startMCP(t, []string{"GOVEE_PATH=/mcp-" + secret}, "--dry-run", "mcp", "--listen", "127.0.0.1:0")
-	if !strings.HasSuffix(url, "/mcp-"+secret) {
-		t.Errorf("url = %q, want the path from GOVEE_PATH", url)
-	}
-}
-
-func TestMCPRejectsShortSecret(t *testing.T) {
-	cmd := exec.Command(bin, "mcp", "--listen", "127.0.0.1:0", "--path", "/mcp-short")
-	cmd.Env = withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER", "GOVEE_PATH")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Fatal("mcp started without a password and with a short secret")
-	}
-	if !strings.Contains(stderr.String(), "at least 26 characters") {
-		t.Errorf("stderr = %q, want it to explain the secret length", stderr.String())
+func TestMCPRequiresToken(t *testing.T) {
+	for name, args := range map[string][]string{
+		"missing": {"mcp", "--listen", "127.0.0.1:0"},
+		"short":   {"mcp", "--listen", "127.0.0.1:0", "--token", "short"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.Command(bin, args...)
+			cmd.Env = withoutEnv(os.Environ(), "GOVEE_TOKEN")
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatal("mcp started without a valid token")
+			}
+			if !strings.Contains(stderr.String(), "at least 26 characters with --token or GOVEE_TOKEN") {
+				t.Errorf("stderr = %q, want it to explain the token", stderr.String())
+			}
+		})
 	}
 }
 
 func startMCP(t *testing.T, extraEnv []string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER", "GOVEE_PATH"), extraEnv...)
+	cmd.Env = append(withoutEnv(os.Environ(), "GOVEE_TOKEN"), extraEnv...)
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -258,20 +227,12 @@ func startMCP(t *testing.T, extraEnv []string, args ...string) string {
 	return strings.TrimPrefix(line, "listening on ")
 }
 
-func connectMCP(t *testing.T, ctx context.Context, url, user, password string) *mcp.ClientSession {
+func connectMCP(t *testing.T, ctx context.Context, url, token string) *mcp.ClientSession {
 	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	httpClient := http.DefaultClient
-	if user != "" || password != "" {
-		httpClient = &http.Client{Transport: basicAuthTransport{
-			base: http.DefaultTransport,
-			user: user,
-			pass: password,
-		}}
-	}
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint:   url,
-		HTTPClient: httpClient,
+		HTTPClient: &http.Client{Transport: bearerTransport{base: http.DefaultTransport, token: token}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -280,19 +241,20 @@ func connectMCP(t *testing.T, ctx context.Context, url, user, password string) *
 	return session
 }
 
-type basicAuthTransport struct {
-	base http.RoundTripper
-	user string
-	pass string
+type bearerTransport struct {
+	base  http.RoundTripper
+	token string
 }
 
-func (b basicAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	r.SetBasicAuth(b.user, b.pass)
+	r.Header.Set("Authorization", "Bearer "+b.token)
 	return b.base.RoundTrip(r)
 }
 
-func mcpStatus(t *testing.T, url, user, password string) (int, string) {
+// mcpStatus sends a ping with the given Authorization header (none if empty)
+// and returns the status code and the WWW-Authenticate header.
+func mcpStatus(t *testing.T, url, authorization string) (int, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -302,8 +264,8 @@ func mcpStatus(t *testing.T, url, user, password string) (int, string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if user != "" || password != "" {
-		req.SetBasicAuth(user, password)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

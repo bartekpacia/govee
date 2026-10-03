@@ -18,9 +18,9 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// minSecretLen is the shortest secret path segment accepted without a password.
+// minTokenLen is the shortest accepted token.
 // It is the length of crypto/rand.Text, which carries 128 bits of randomness.
-const minSecretLen = 26
+const minTokenLen = 26
 
 // radio serializes Bluetooth use. BlueZ misbehaves when two commands
 // scan or connect at once, and a client may call tools in parallel.
@@ -29,21 +29,14 @@ var radio sync.Mutex
 // serveMCP serves an MCP endpoint that controls the lamps.
 // It returns when ctx is canceled (interrupt or SIGTERM).
 func serveMCP(ctx context.Context, cmd *cli.Command) error {
-	user := cmd.String("user")
-	password := cmd.String("password")
+	token := cmd.String("token")
+	if len(token) < minTokenLen {
+		return fmt.Errorf("set a token of at least %d characters with --token or GOVEE_TOKEN, e.g. GOVEE_TOKEN=%s",
+			minTokenLen, rand.Text())
+	}
 	path := cmd.String("path")
 	if path == "" || !strings.HasPrefix(path, "/") || strings.Contains(path, "?") {
 		return fmt.Errorf("invalid path %q (want an absolute path like /mcp)", path)
-	}
-	if password != "" && user == "" {
-		return errors.New("set a user with --user or GOVEE_USER")
-	}
-	// Without a password, the path itself is the secret: clients that
-	// can't send headers (claude.ai custom connectors) can still connect.
-	if _, secret, _ := strings.CutLast(path, "/"); password == "" && len(secret) < minSecretLen {
-		return fmt.Errorf("set a password with --password or GOVEE_PASSWORD, "+
-			"or make the last part of --path (or GOVEE_PATH) a secret of at least %d characters, e.g. --path /mcp-%s",
-			minSecretLen, rand.Text())
 	}
 
 	server := newMCPServer(logger(cmd), cmd.Bool("dry-run"), cmd.Duration("timeout"))
@@ -56,16 +49,13 @@ func serveMCP(ctx context.Context, cmd *cli.Command) error {
 		JSONResponse: true,
 		// A reverse proxy on this machine connects over loopback but
 		// forwards the public Host header. The SDK would reject that
-		// as a DNS-rebinding attempt. The password is still required,
+		// as a DNS-rebinding attempt. The token is still required,
 		// and the handler sets no CORS headers.
 		DisableLocalhostProtection: true,
 	})
 
 	mux := http.NewServeMux()
-	if password != "" {
-		handler = requireBasicAuth(user, password, handler)
-	}
-	mux.Handle(path, handler)
+	mux.Handle(path, requireBearer(token, handler))
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -97,15 +87,14 @@ func serveMCP(ctx context.Context, cmd *cli.Command) error {
 	}
 }
 
-func requireBasicAuth(user, password string, next http.Handler) http.Handler {
+// requireBearer rejects requests without "Authorization: Bearer <token>".
+func requireBearer(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUser, gotPassword, ok := r.BasicAuth()
-		// Compare both sides even when the header is missing, so the
-		// timing does not reveal which check failed.
-		userOK := subtle.ConstantTimeCompare([]byte(gotUser), []byte(user)) == 1
-		passOK := subtle.ConstantTimeCompare([]byte(gotPassword), []byte(password)) == 1
-		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="govee", charset="UTF-8"`)
+		scheme, got, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+		// Auth schemes are case-insensitive (RFC 9110).
+		// The comparison takes constant time, so timing reveals nothing about the token.
+		if !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="govee"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
