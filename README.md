@@ -106,9 +106,22 @@ claude mcp add --transport http govee https://lights.pacia.tech/mcp \
 ```
 
 The same URL and `Authorization` header work for any other MCP
-client that can attach headers. In claude.ai, add a custom connector
-for that URL and set the request header `Authorization` to
-`Basic` followed by the token `echo -n 'govee:pick-a-long-one' | base64` prints.
+client that can attach headers.
+
+claude.ai custom connectors often can't send headers
+(request headers are a beta for some organizations).
+For those, leave the password unset and make the URL path the secret:
+
+```
+GOVEE_PATH=/mcp-$(openssl rand -hex 16) govee mcp
+```
+
+Without a password, `govee mcp` refuses to start unless the last part
+of the path is at least 26 characters long.
+Add `https://<your-host>/mcp-…` in claude.ai as a custom connector
+with "No sign-in".
+Anyone who knows the URL can change the lights,
+so keep it out of access logs (`access_log off;` in nginx).
 
 `govee music` stays a local command. It listens to the audio
 playing on the machine it runs on, which a Pi in the corner usually is not.

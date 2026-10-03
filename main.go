@@ -142,8 +142,10 @@ func main() {
 				Name:  "mcp",
 				Usage: "serve an MCP endpoint that controls the lamps",
 				Description: "Listens for MCP clients (Claude, for example) at http://LISTEN/PATH,\n" +
-					"default http://127.0.0.1:8080/mcp. Every request needs HTTP basic auth.\n" +
-					"Set the password with --password or GOVEE_PASSWORD.\n\n" +
+					"default http://127.0.0.1:8080/mcp. Every request needs HTTP basic auth;\n" +
+					"set the password with --password or GOVEE_PASSWORD.\n" +
+					"For clients that can't send headers, leave the password unset and make the\n" +
+					"last part of the path a random secret instead (at least 26 characters).\n\n" +
 					"The process has to run within Bluetooth range of the bulbs.\n" +
 					"Put a TLS reverse proxy in front of it before exposing it on the internet;\n" +
 					"basic auth over plain HTTP would send the password in the clear.",
@@ -154,9 +156,10 @@ func main() {
 						Value: "127.0.0.1:8080",
 					},
 					&cli.StringFlag{
-						Name:  "path",
-						Usage: "URL path of the MCP endpoint",
-						Value: "/mcp",
+						Name:    "path",
+						Usage:   "URL path of the MCP endpoint",
+						Value:   "/mcp",
+						Sources: cli.EnvVars("GOVEE_PATH"),
 					},
 					&cli.StringFlag{
 						Name:    "user",

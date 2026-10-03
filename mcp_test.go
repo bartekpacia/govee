@@ -172,7 +172,7 @@ func TestMCPPasswordFromEnv(t *testing.T) {
 
 func TestMCPRequiresPassword(t *testing.T) {
 	cmd := exec.Command(bin, "mcp", "--listen", "127.0.0.1:0")
-	cmd.Env = withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER")
+	cmd.Env = withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER", "GOVEE_PATH")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -184,10 +184,55 @@ func TestMCPRequiresPassword(t *testing.T) {
 	}
 }
 
+// secret is a path segment long enough to be accepted without a password.
+const secret = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func TestMCPSecretPath(t *testing.T) {
+	url := startMCP(t, nil, "--dry-run", "mcp", "--listen", "127.0.0.1:0", "--path", "/mcp-"+secret)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session := connectMCP(t, ctx, url, "", "")
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_lamps"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(toolText(res), "table") {
+		t.Errorf("result = %q, want it to mention table", toolText(res))
+	}
+
+	base, _, _ := strings.Cut(url, "/mcp-")
+	for _, wrong := range []string{base + "/mcp", url[:len(url)-1]} {
+		if status, _ := mcpStatus(t, wrong, "", ""); status != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", wrong, status)
+		}
+	}
+}
+
+func TestMCPSecretPathFromEnv(t *testing.T) {
+	url := startMCP(t, []string{"GOVEE_PATH=/mcp-" + secret}, "--dry-run", "mcp", "--listen", "127.0.0.1:0")
+	if !strings.HasSuffix(url, "/mcp-"+secret) {
+		t.Errorf("url = %q, want the path from GOVEE_PATH", url)
+	}
+}
+
+func TestMCPRejectsShortSecret(t *testing.T) {
+	cmd := exec.Command(bin, "mcp", "--listen", "127.0.0.1:0", "--path", "/mcp-short")
+	cmd.Env = withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER", "GOVEE_PATH")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("mcp started without a password and with a short secret")
+	}
+	if !strings.Contains(stderr.String(), "at least 26 characters") {
+		t.Errorf("stderr = %q, want it to explain the secret length", stderr.String())
+	}
+}
+
 func startMCP(t *testing.T, extraEnv []string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER"), extraEnv...)
+	cmd.Env = append(withoutEnv(os.Environ(), "GOVEE_PASSWORD", "GOVEE_USER", "GOVEE_PATH"), extraEnv...)
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -216,13 +261,17 @@ func startMCP(t *testing.T, extraEnv []string, args ...string) string {
 func connectMCP(t *testing.T, ctx context.Context, url, user, password string) *mcp.ClientSession {
 	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: url,
-		HTTPClient: &http.Client{Transport: basicAuthTransport{
+	httpClient := http.DefaultClient
+	if user != "" || password != "" {
+		httpClient = &http.Client{Transport: basicAuthTransport{
 			base: http.DefaultTransport,
 			user: user,
 			pass: password,
-		}},
+		}}
+	}
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   url,
+		HTTPClient: httpClient,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

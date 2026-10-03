@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -17,6 +18,10 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+// minSecretLen is the shortest secret path segment accepted without a password.
+// It is the length of crypto/rand.Text, which carries 128 bits of randomness.
+const minSecretLen = 26
+
 // radio serializes Bluetooth use. BlueZ misbehaves when two commands
 // scan or connect at once, and a client may call tools in parallel.
 var radio sync.Mutex
@@ -26,19 +31,23 @@ var radio sync.Mutex
 func serveMCP(ctx context.Context, cmd *cli.Command) error {
 	user := cmd.String("user")
 	password := cmd.String("password")
-	if user == "" {
-		return errors.New("set a user with --user or GOVEE_USER")
-	}
-	if password == "" {
-		return errors.New("set a password with --password or GOVEE_PASSWORD")
-	}
 	path := cmd.String("path")
 	if path == "" || !strings.HasPrefix(path, "/") || strings.Contains(path, "?") {
 		return fmt.Errorf("invalid path %q (want an absolute path like /mcp)", path)
 	}
+	if password != "" && user == "" {
+		return errors.New("set a user with --user or GOVEE_USER")
+	}
+	// Without a password, the path itself is the secret: clients that
+	// can't send headers (claude.ai custom connectors) can still connect.
+	if _, secret, _ := strings.CutLast(path, "/"); password == "" && len(secret) < minSecretLen {
+		return fmt.Errorf("set a password with --password or GOVEE_PASSWORD, "+
+			"or make the last part of --path (or GOVEE_PATH) a secret of at least %d characters, e.g. --path /mcp-%s",
+			minSecretLen, rand.Text())
+	}
 
 	server := newMCPServer(logger(cmd), cmd.Bool("dry-run"), cmd.Duration("timeout"))
-	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return server
 	}, &mcp.StreamableHTTPOptions{
 		// Stateless covers both older clients and the 2026-07-28 protocol,
@@ -53,7 +62,10 @@ func serveMCP(ctx context.Context, cmd *cli.Command) error {
 	})
 
 	mux := http.NewServeMux()
-	mux.Handle(path, requireBasicAuth(user, password, handler))
+	if password != "" {
+		handler = requireBasicAuth(user, password, handler)
+	}
+	mux.Handle(path, handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
