@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -56,9 +57,9 @@ func sendAll(ctx context.Context, lamps []lamp, payload []byte, logf logFunc) ([
 // connectAll opens a session to every lamp. sessions[i] is nil
 // when lamps[i] could not be reached, and results[i] says why.
 func connectAll(ctx context.Context, lamps []lamp, logf logFunc) (sessions []*session, results []error, err error) {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		return nil, nil, fmt.Errorf("enable bluetooth adapter: %w", err)
+	adapter, err := enable()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	found, err := scanFor(ctx, adapter, lamps)
@@ -104,17 +105,93 @@ func broadcast(ctx context.Context, sessions []*session, payload []byte) []error
 	return errs
 }
 
+// enable turns the default Bluetooth adapter on.
+func enable() (*bluetooth.Adapter, error) {
+	adapter := bluetooth.DefaultAdapter
+	err := adapter.Enable()
+	// CoreBluetooth reports this when the terminal has not been allowed
+	// to use Bluetooth. The setting is per terminal app, not per binary.
+	if err != nil && runtime.GOOS == "darwin" && strings.Contains(err.Error(), "not authorized") {
+		err = fmt.Errorf("%w (System Settings → Privacy & Security → Bluetooth, allow the terminal that launched govee)", err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("enable bluetooth adapter: %w", err)
+	}
+	return adapter, nil
+}
+
+// advID is the identity carried by one advertisement.
+// address is a MAC on Linux and a UUID on macOS.
+type advID struct {
+	address string
+	name    string
+}
+
+func advIDFrom(r bluetooth.ScanResult) advID {
+	return advID{
+		address: strings.ToUpper(r.Address.String()),
+		name:    r.LocalName(),
+	}
+}
+
+// matchesLamp reports whether a scan result is this lamp.
+//
+// On Linux the result's address is the bulb's MAC, so that comparison is enough.
+// macOS (CoreBluetooth) never reveals the MAC.
+// It substitutes a UUID that stays the same for this computer,
+// and the bulb's advertised name ends with the last two MAC bytes.
+// A bulb at 5C:E7:53:C7:2D:2F advertises GVH60062D2F or Govee_H6006_2D2F.
+func matchesLamp(l lamp, id advID) bool {
+	if strings.EqualFold(l.addr, id.address) {
+		return true
+	}
+	suffix := macSuffix(l.addr)
+	if suffix == "" || !isGovee(id.name) {
+		return false
+	}
+	return strings.HasSuffix(strings.ToUpper(id.name), suffix)
+}
+
+// macSuffix is the last four hex digits of a MAC, without colons.
+// Those digits are what Govee puts at the end of the advertised name.
+// It is empty when addr is not a MAC (a CoreBluetooth UUID, for example).
+func macSuffix(addr string) string {
+	hex := strings.ReplaceAll(strings.ToUpper(addr), ":", "")
+	if len(hex) != 12 {
+		return ""
+	}
+	return hex[8:]
+}
+
+// lampLabel is the known name for a scan result, or "-" when it has none.
+func lampLabel(addr, advName string) string {
+	if n := lampName(addr); n != addr {
+		return n
+	}
+	id := advID{address: addr, name: advName}
+	for name, mac := range knownLamps {
+		if matchesLamp(lamp{name: name, addr: mac}, id) {
+			return name
+		}
+	}
+	return "-"
+}
+
 // scanFor scans until all lamps are seen or ctx is done.
 func scanFor(ctx context.Context, adapter *bluetooth.Adapter, lamps []lamp) (map[string]bluetooth.Address, error) {
 	found := make(map[string]bluetooth.Address)
 	stop := context.AfterFunc(ctx, func() { adapter.StopScan() })
 	defer stop()
 	err := adapter.Scan(func(a *bluetooth.Adapter, r bluetooth.ScanResult) {
-		addr := strings.ToUpper(r.Address.String())
-		if !slices.ContainsFunc(lamps, func(l lamp) bool { return l.addr == addr }) {
-			return
+		id := advIDFrom(r)
+		for _, l := range lamps {
+			if _, ok := found[l.addr]; ok {
+				continue
+			}
+			if matchesLamp(l, id) {
+				found[l.addr] = r.Address
+			}
 		}
-		found[addr] = r.Address
 		if len(found) == len(lamps) {
 			a.StopScan()
 		}
@@ -130,9 +207,9 @@ type device struct {
 
 // discover lists nearby Govee devices seen within d.
 func discover(ctx context.Context, d time.Duration) ([]device, error) {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		return nil, fmt.Errorf("enable bluetooth adapter: %w", err)
+	adapter, err := enable()
+	if err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
@@ -140,13 +217,12 @@ func discover(ctx context.Context, d time.Duration) ([]device, error) {
 	defer stop()
 
 	seen := make(map[string]device)
-	err := adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
-		name := r.LocalName()
-		if !isGovee(name) {
+	err = adapter.Scan(func(_ *bluetooth.Adapter, r bluetooth.ScanResult) {
+		id := advIDFrom(r)
+		if !isGovee(id.name) {
 			return
 		}
-		addr := strings.ToUpper(r.Address.String())
-		seen[addr] = device{addr: addr, name: name, rssi: r.RSSI}
+		seen[id.address] = device{addr: id.address, name: id.name, rssi: r.RSSI}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scan: %w", err)

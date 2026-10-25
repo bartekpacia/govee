@@ -103,13 +103,13 @@ func requireBearer(token string, next http.Handler) http.Handler {
 }
 
 type lampInput struct {
-	Lamps []string `json:"lamps,omitempty" jsonschema:"lamp names, \"all\", or BLE MAC addresses. Omit to use every known lamp."`
+	Lamps []string `json:"lamps,omitempty" jsonschema:"lamp names, \"all\", or BLE addresses (a MAC, or the UUID scan_lamps prints on macOS). Omit to use every known lamp."`
 }
 
 type colorInput struct {
 	Color      string   `json:"color" jsonschema:"a color name (red, green, blue, orange, yellow, purple, pink, cyan, white) or RRGGBB hex, optionally prefixed with #"`
 	Brightness *int     `json:"brightness,omitempty" jsonschema:"percent of full brightness, from 1 to 100. Omit for 100. Dims by scaling the color."`
-	Lamps      []string `json:"lamps,omitempty" jsonschema:"lamp names, \"all\", or BLE MAC addresses. Omit to use every known lamp."`
+	Lamps      []string `json:"lamps,omitempty" jsonschema:"lamp names, \"all\", or BLE addresses (a MAC, or the UUID scan_lamps prints on macOS). Omit to use every known lamp."`
 }
 
 type scanInput struct {

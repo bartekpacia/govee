@@ -122,6 +122,11 @@ func TestCLI(t *testing.T) {
 			wantStdout: "AA:BB:CC:DD:EE:FF AA:BB:CC:DD:EE:FF 33 01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 33\n",
 		},
 		{
+			name:       "CoreBluetooth UUID is a lamp address",
+			args:       []string{"--dry-run", "on", "a1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+			wantStdout: "A1B2C3D4-E5F6-7890-ABCD-EF1234567890 A1B2C3D4-E5F6-7890-ABCD-EF1234567890 33 01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 33\n",
+		},
+		{
 			name: "duplicate lamps are sent once, in order",
 			args: []string{"--dry-run", "off", "table", "table", "all"},
 			wantStdout: "" +
@@ -136,7 +141,7 @@ func TestCLI(t *testing.T) {
 		{
 			name:       "unknown lamp",
 			args:       []string{"--dry-run", "on", "kitchen"},
-			wantStderr: `govee: unknown lamp "kitchen" (want drawer, table, all, or a MAC address)`,
+			wantStderr: `govee: unknown lamp "kitchen" (want drawer, table, all, or a BLE address)`,
 			wantCode:   1,
 		},
 		{

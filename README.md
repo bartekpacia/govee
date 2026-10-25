@@ -24,11 +24,34 @@ govee -v on                    # log decrypted protocol traffic
 GOVEE_TOKEN=… govee mcp       # MCP server for Claude and other clients
 ```
 
-A LAMP is `table`, `drawer`, `all`, or a BLE MAC address.
+A LAMP is `table`, `drawer`, `all`, or a BLE address.
+A BLE address is a MAC (`AA:BB:CC:DD:EE:FF`),
+or on macOS the UUID printed by `govee scan`.
 Without LAMP arguments, a command applies to all lamps.
 Lamp names are hard-coded in `knownLamps` in `govee.go`.
 
-On Linux it talks to BlueZ over D-Bus, so it doesn't need root.
+On Linux it talks to BlueZ over D-Bus, so it doesn't need root,
+and a scan result's address is the bulb's MAC.
+On macOS it talks to CoreBluetooth, which needs CGO
+(the default when you `go build` or `go install` on a Mac;
+the Xcode command line tools supply the compiler).
+Build the Mac binary on a Mac.
+CoreBluetooth is an Objective-C framework,
+so a Linux machine cannot cross-compile it.
+
+The first time you run `govee`,
+macOS asks that terminal for Bluetooth permission.
+Allow it under System Settings → Privacy & Security → Bluetooth.
+That permission belongs to the terminal (Terminal, iTerm, Cursor),
+not to the `govee` binary.
+
+macOS does not reveal a device's MAC address.
+It substitutes a UUID that stays the same on this computer.
+Named lamps are still selected by the MAC in `knownLamps`:
+the bulb advertises a name ending in the last two MAC bytes,
+so `5C:E7:53:C7:2D:2F` is the bulb named `GVH60062D2F`
+(some firmware writes that as `Govee_H6006_2D2F`).
+
 Only one BLE client can be connected to a bulb at a time:
 close the Govee app on your phone first.
 
@@ -83,8 +106,11 @@ WantedBy=multi-user.target
 `User` has to be in the `bluetooth` group
 (`sudo usermod -aG bluetooth pi`), because the program talks to
 BlueZ over D-Bus and does not need root.
-Build a binary for the Pi from a 64-bit machine with
+Build a binary for the Pi from a 64-bit machine,
+including a Mac, with
 `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o govee .`
+The Linux build talks to BlueZ over D-Bus and does not need CGO.
+The Mac build does, so leave `CGO_ENABLED` unset when building for macOS.
 
 Claude Code connects with the token in a header:
 
@@ -102,15 +128,24 @@ playing on the machine it runs on, which a Pi in the corner usually is not.
 
 ## Music mode
 
-`govee music` records the default output's monitor
-(a copy of everything being played) with `parec`,
-and updates the lamps 20 times per second over open connections:
+`govee music` records a copy of everything being played
+and updates the lamps 20 times per second over open connections.
+On Linux that copy is the PulseAudio monitor, read with `parec`.
+On macOS it is a Core Audio process tap (macOS 14.2 or newer):
+the same mix the speakers receive, without muting them.
+The first run asks for system-audio recording permission
+(System Settings → Privacy & Security → Screen & System Audio Recording).
+macOS shows its recording indicator while the tap is open.
+The lamps then follow the sound:
 
 - On every beat (a sudden rise of the bass), the hue rotates by 137.5°,
   so consecutive colors are always clearly different.
 - Brightness follows loudness relative to the recent peak:
   it jumps up immediately and fades out.
   Dimming works by scaling the RGB values.
+
+`--input` reads raw 48 kHz mono s16le audio from a file,
+or from stdin when the argument is `-`, instead of recording.
 
 The lamps visibly keep up with 20 updates per second
 (measured with the hidden `govee bench` command).

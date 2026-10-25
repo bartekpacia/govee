@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/urfave/cli/v3"
@@ -66,7 +65,11 @@ func music(ctx context.Context, cmd *cli.Command) error {
 		for c := range frames {
 			fmt.Fprintf(cmd.Root().Writer, "%x\n", c)
 		}
-		return <-readErr
+		err := <-readErr
+		if err != nil && ctx.Err() == nil {
+			return err
+		}
+		return nil
 	}
 
 	connectCtx, cancel := context.WithTimeout(ctx, cmd.Duration("timeout"))
@@ -97,18 +100,7 @@ func music(ctx context.Context, cmd *cli.Command) error {
 func openAudio(ctx context.Context, cmd *cli.Command) (io.Reader, func(), error) {
 	switch input := cmd.String("input"); input {
 	case "":
-		// The default sink's monitor is a copy of everything being played.
-		rec := exec.CommandContext(ctx, "parec", "-d", "@DEFAULT_MONITOR@",
-			"--raw", "--format=s16le", fmt.Sprintf("--rate=%d", sampleRate), "--channels=1", "--latency-msec=20")
-		rec.Stderr = os.Stderr
-		out, err := rec.StdoutPipe()
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := rec.Start(); err != nil {
-			return nil, nil, fmt.Errorf("start parec: %w", err)
-		}
-		return out, func() { rec.Process.Kill(); rec.Wait() }, nil
+		return recordSystem(ctx)
 	case "-":
 		return cmd.Root().Reader, func() {}, nil
 	default:

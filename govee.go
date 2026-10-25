@@ -108,11 +108,12 @@ func crypt(key, p []byte, aesFunc func(b cipher.Block, dst, src []byte)) []byte 
 
 type lamp struct {
 	name string
-	addr string // upper-case MAC address
+	addr string // upper-case MAC, or the UUID CoreBluetooth uses on macOS
 }
 
-// resolveLamps turns lamp names, "all", and MAC addresses into a list
+// resolveLamps turns lamp names, "all", and BLE addresses into a list
 // without duplicates. No arguments means all known lamps.
+// A BLE address is a MAC, or the UUID that scan prints on macOS.
 func resolveLamps(args []string) ([]lamp, error) {
 	if len(args) == 0 {
 		args = []string{"all"}
@@ -134,15 +135,39 @@ func resolveLamps(args []string) ([]lamp, error) {
 			add(lamp{arg, addr})
 			continue
 		}
-		hw, err := net.ParseMAC(arg)
-		if err != nil || len(hw) != 6 {
-			names := strings.Join(slices.Sorted(maps.Keys(knownLamps)), ", ")
-			return nil, fmt.Errorf("unknown lamp %q (want %s, all, or a MAC address)", arg, names)
+		if hw, err := net.ParseMAC(arg); err == nil && len(hw) == 6 {
+			addr := strings.ToUpper(hw.String())
+			add(lamp{lampName(addr), addr})
+			continue
 		}
-		addr := strings.ToUpper(hw.String())
-		add(lamp{lampName(addr), addr})
+		if id, ok := parsePeripheralUUID(arg); ok {
+			add(lamp{lampName(id), id})
+			continue
+		}
+		names := strings.Join(slices.Sorted(maps.Keys(knownLamps)), ", ")
+		return nil, fmt.Errorf("unknown lamp %q (want %s, all, or a BLE address)", arg, names)
 	}
 	return lamps, nil
+}
+
+// parsePeripheralUUID accepts the identifier CoreBluetooth uses
+// in place of a MAC: eight-four-four-four-twelve hex digits.
+func parsePeripheralUUID(s string) (string, bool) {
+	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return "", false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			continue
+		}
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return "", false
+		}
+	}
+	return strings.ToUpper(s), true
 }
 
 // lampName returns the known name of addr, or addr itself.
