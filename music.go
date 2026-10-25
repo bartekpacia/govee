@@ -8,8 +8,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/urfave/cli/v3"
@@ -67,7 +65,11 @@ func music(ctx context.Context, cmd *cli.Command) error {
 		for c := range frames {
 			fmt.Fprintf(cmd.Root().Writer, "%x\n", c)
 		}
-		return <-readErr
+		err := <-readErr
+		if err != nil && ctx.Err() == nil {
+			return err
+		}
+		return nil
 	}
 
 	connectCtx, cancel := context.WithTimeout(ctx, cmd.Duration("timeout"))
@@ -98,22 +100,7 @@ func music(ctx context.Context, cmd *cli.Command) error {
 func openAudio(ctx context.Context, cmd *cli.Command) (io.Reader, func(), error) {
 	switch input := cmd.String("input"); input {
 	case "":
-		// The default sink's monitor is a copy of everything being played.
-		// parec is a PulseAudio tool, so this exists on Linux and not on macOS.
-		if runtime.GOOS != "linux" {
-			return nil, nil, errors.New("recording what this machine is playing needs parec (PulseAudio), a Linux tool; pass --input with raw 48 kHz mono s16le audio")
-		}
-		rec := exec.CommandContext(ctx, "parec", "-d", "@DEFAULT_MONITOR@",
-			"--raw", "--format=s16le", fmt.Sprintf("--rate=%d", sampleRate), "--channels=1", "--latency-msec=20")
-		rec.Stderr = os.Stderr
-		out, err := rec.StdoutPipe()
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := rec.Start(); err != nil {
-			return nil, nil, fmt.Errorf("start parec: %w", err)
-		}
-		return out, func() { rec.Process.Kill(); rec.Wait() }, nil
+		return recordSystem(ctx)
 	case "-":
 		return cmd.Root().Reader, func() {}, nil
 	default:

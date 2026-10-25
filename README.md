@@ -128,9 +128,15 @@ playing on the machine it runs on, which a Pi in the corner usually is not.
 
 ## Music mode
 
-`govee music` records the default output's monitor
-(a copy of everything being played) with `parec`,
-and updates the lamps 20 times per second over open connections:
+`govee music` records a copy of everything being played
+and updates the lamps 20 times per second over open connections.
+On Linux that copy is the PulseAudio monitor, read with `parec`.
+On macOS it is a Core Audio process tap (macOS 14.2 or newer):
+the same mix the speakers receive, without muting them.
+The first run asks for system-audio recording permission
+(System Settings → Privacy & Security → Screen & System Audio Recording).
+macOS shows its recording indicator while the tap is open.
+The lamps then follow the sound:
 
 - On every beat (a sudden rise of the bass), the hue rotates by 137.5°,
   so consecutive colors are always clearly different.
@@ -138,9 +144,8 @@ and updates the lamps 20 times per second over open connections:
   it jumps up immediately and fades out.
   Dimming works by scaling the RGB values.
 
-`parec` is a PulseAudio tool, so that recording is Linux-only.
-On macOS, pass `--input` with raw 48 kHz mono s16le audio
-(or `-` to read that stream from stdin).
+`--input` reads raw 48 kHz mono s16le audio from a file,
+or from stdin when the argument is `-`, instead of recording.
 
 The lamps visibly keep up with 20 updates per second
 (measured with the hidden `govee bench` command).

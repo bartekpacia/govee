@@ -102,7 +102,8 @@ func main() {
 				Usage: "make lamps follow the audio playing on this machine (Ctrl-C to stop)",
 				Description: "The color changes on every beat and the brightness follows loudness.\n" +
 					"On Linux, audio is recorded from the default output's monitor with parec.\n" +
-					"macOS has no such monitor; pass --input with raw 48 kHz mono s16le audio.",
+					"On macOS, a Core Audio tap records the mix of everything being played.\n" +
+					"The first run asks for system-audio recording permission.",
 				Arguments: []cli.Argument{lampsArg()},
 				Flags: []cli.Flag{
 					&cli.FloatFlag{
