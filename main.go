@@ -19,7 +19,8 @@ func main() {
 	cmd := &cli.Command{
 		Name:  "govee",
 		Usage: "control Govee H6006 bulbs over Bluetooth LE",
-		Description: "LAMP is a lamp name (table, drawer), \"all\", or a BLE MAC address.\n" +
+		Description: "LAMP is a lamp name (table, drawer), \"all\", or a BLE address.\n" +
+			"A BLE address is a MAC, or on macOS the UUID printed by scan.\n" +
 			"Without LAMP arguments, a command applies to all lamps.",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -100,7 +101,8 @@ func main() {
 				Name:  "music",
 				Usage: "make lamps follow the audio playing on this machine (Ctrl-C to stop)",
 				Description: "The color changes on every beat and the brightness follows loudness.\n" +
-					"Audio is recorded from the default output's monitor with parec.",
+					"On Linux, audio is recorded from the default output's monitor with parec.\n" +
+					"macOS has no such monitor; pass --input with raw 48 kHz mono s16le audio.",
 				Arguments: []cli.Argument{lampsArg()},
 				Flags: []cli.Flag{
 					&cli.FloatFlag{
@@ -226,11 +228,7 @@ func scan(ctx context.Context, cmd *cli.Command) error {
 	w := tabwriter.NewWriter(cmd.Root().Writer, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ADDRESS\tRSSI\tNAME\tLAMP")
 	for _, d := range devices {
-		name := lampName(d.addr)
-		if name == d.addr {
-			name = "-"
-		}
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", d.addr, d.rssi, d.name, name)
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", d.addr, d.rssi, d.name, lampLabel(d.addr, d.name))
 	}
 	return w.Flush()
 }

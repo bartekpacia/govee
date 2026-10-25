@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/urfave/cli/v3"
@@ -98,6 +99,10 @@ func openAudio(ctx context.Context, cmd *cli.Command) (io.Reader, func(), error)
 	switch input := cmd.String("input"); input {
 	case "":
 		// The default sink's monitor is a copy of everything being played.
+		// parec is a PulseAudio tool, so this exists on Linux and not on macOS.
+		if runtime.GOOS != "linux" {
+			return nil, nil, errors.New("recording what this machine is playing needs parec (PulseAudio), a Linux tool; pass --input with raw 48 kHz mono s16le audio")
+		}
 		rec := exec.CommandContext(ctx, "parec", "-d", "@DEFAULT_MONITOR@",
 			"--raw", "--format=s16le", fmt.Sprintf("--rate=%d", sampleRate), "--channels=1", "--latency-msec=20")
 		rec.Stderr = os.Stderr
